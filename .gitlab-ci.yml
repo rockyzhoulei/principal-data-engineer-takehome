@@ -1,0 +1,36 @@
+# GitLab CI/CD Pipeline Configuration
+# For Principal Data Engineer Take-Home Assignment
+
+stages:
+  - lint
+  - test
+  - build
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  paths:
+    - .cache/pip
+    - .venv/
+
+before_script:
+  - python -m venv .venv
+  - source .venv/bin/activate
+  - pip install -r requirements.txt
+
+lint:
+  stage: lint
+  script:
+    - pip install flake8
+    - flake8 src/ tests/
+
+test:
+  stage: test
+  script:
+    - pytest tests/ -v
+
+build:
+  stage: build
+  script:
+    - echo "Build stage - implement as needed"
