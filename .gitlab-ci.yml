@@ -1,36 +1,151 @@
 # GitLab CI/CD Pipeline Configuration
-# For Principal Data Engineer Take-Home Assignment
+# Principal Data Engineer take-home assignment
 
 stages:
   - lint
   - test
+  - data_quality
   - build
+  - deploy_staging
+  - manual_prod_gate
+  - deploy_prod
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  PYTHON_VERSION: "3.12"
+  PYTHONPATH: "$CI_PROJECT_DIR"
 
 cache:
   paths:
     - .cache/pip
     - .venv/
 
-before_script:
-  - python -m venv .venv
-  - source .venv/bin/activate
-  - pip install -r requirements.txt
+.default_setup: &default_setup
+  before_script:
+    - python -m venv .venv
+    - . .venv/bin/activate
+    - python -m pip install --upgrade pip
+    - pip install -r requirements.txt
 
 lint:
+  <<: *default_setup
   stage: lint
+  image: python:3.12
   script:
-    - pip install flake8
-    - flake8 src/ tests/
+    - . .venv/bin/activate
+    - pip install flake8 mypy
+    - flake8 src tests
+    - mypy src
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
-test:
+unit_tests:
+  <<: *default_setup
   stage: test
+  image: python:3.12
   script:
+    - . .venv/bin/activate
     - pytest tests/ -v
+  artifacts:
+    when: always
+    reports:
+      junit: junit.xml
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# Data contract checks for the pipeline output.
+# These checks validate the generic pipeline behavior rather than a specific sample row count.
+data_quality:
+  <<: *default_setup
+  stage: data_quality
+  image: python:3.12
+  script:
+    - . .venv/bin/activate
+    - python -m src.main data/raw/events.csv csv
+    - python - <<'PY'
+import pandas as pd
+from pathlib import Path
+
+curated = Path('data/curated/events_curated.parquet')
+quarantine = Path('data/quarantine/events_invalid.parquet')
+
+assert curated.exists(), 'Curated output parquet is missing'
+assert quarantine.exists(), 'Quarantine output parquet is missing'
+
+curated_df = pd.read_parquet(curated)
+quarantine_df = pd.read_parquet(quarantine)
+
+assert len(curated_df) > 0, 'Curated dataset should contain at least one valid record'
+assert len(quarantine_df) >= 0, 'Quarantine dataset should be readable'
+assert curated_df[['customer_id', 'source_system', 'event_id']].duplicated().sum() == 0
+assert '_validation_errors' in quarantine_df.columns
+assert quarantine_df['_validation_errors'].fillna('').astype(str).str.strip().ne('').any()
+print(f'curated_rows={len(curated_df)} quarantine_rows={len(quarantine_df)}')
+PY
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
 build:
+  <<: *default_setup
   stage: build
+  image: python:3.12
   script:
-    - echo "Build stage - implement as needed"
+    - . .venv/bin/activate
+    - python -m compileall src
+    - tar -czf artifact.tar.gz src tests README.md ARCHITECTURE.md IMPLEMENTATION.md requirements.txt
+  artifacts:
+    paths:
+      - artifact.tar.gz
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# Staging deployment is allowed for merge requests and main branch builds.
+deploy_staging:
+  stage: deploy_staging
+  image: python:3.12
+  script:
+    - echo "Deploying to staging environment"
+    - echo "Environment: staging"
+    - echo "Secrets are managed via GitLab CI/CD variables and are not checked into source control."
+  environment:
+    name: staging
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+manual_prod_gate:
+  stage: manual_prod_gate
+  image: python:3.12
+  script:
+    - echo "Production approval required before promotion."
+    - echo "This gate blocks deployment until a human reviewer approves the change."
+  when: manual
+  allow_failure: false
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# Production deploy runs only after the manual gate and only on the default branch.
+deploy_prod:
+  stage: deploy_prod
+  image: python:3.12
+  script:
+    - echo "Deploying to production environment"
+    - echo "Environment: production"
+    - echo "Promotion is blocked when lint, test, data quality, or build fails."
+  environment:
+    name: production
+  needs:
+    - job: lint
+    - job: unit_tests
+    - job: data_quality
+    - job: build
+    - job: deploy_staging
+    - job: manual_prod_gate
+  when: on_success
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: on_success
