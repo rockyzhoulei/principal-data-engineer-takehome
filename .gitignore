@@ -53,6 +53,8 @@ coverage.xml
 
 # Generated data files
 data/raw/*
+!data/raw/.gitkeep
+!data/raw/events.csv
 data/curated/*
 data/quarantine/*
 !data/raw/.gitkeep
