@@ -1,0 +1,15 @@
+event_id,source_system,customer_id,event_type,event_timestamp,amount,currency,ingestion_timestamp
+evt-1001,crm,cust-001,purchase,2026-01-15T10:30:00Z,125.50,USD,2026-01-15T10:35:00Z
+evt-1002,api,cust-002,refund,2026-01-15T11:00:00Z,45.00,EUR,2026-01-15T11:05:00Z
+evt-1003,database,cust-003,subscription,2026-01-15T12:15:00Z,299.00,GBP,2026-01-15T12:20:00Z
+evt-1004,events,cust-004,login,2026-01-15T13:00:00Z,15.75,USD,2026-01-15T13:05:00Z
+evt-1001,crm,cust-001,purchase,2026-01-15T10:30:00Z,125.50,USD,2026-01-15T10:45:00Z
+evt-1005,crm,,chargeback,2026-01-15T14:10:00Z,75.00,USD,2026-01-15T14:12:00Z
+evt-1006,api,cust-006,withdrawal,2026-02-30T09:00:00Z,50.00,USD,2026-01-15T09:05:00Z
+evt-1007,events,cust-007,adjustment,2026-01-15T09:30:00Z,-12.50,USD,2026-01-15T09:32:00Z
+evt-1008,crm,cust-008,charge,2026-01-15T10:00:00Z,180.20,CAD,2026-01-15T10:02:00Z
+evt-1002,api,cust-002,refund,2026-01-15T11:00:00Z,45.00,EUR,2026-01-15T11:11:00Z
+evt-1009,database,cust-009,renewal,2026-01-10T08:45:00Z,320.00,JPY,2026-01-12T08:50:00Z
+evt-1010,mobile,cust-010,signup,2026-01-15T15:45:00Z,89.99,USD,2026-01-15T15:46:00Z
+evt-1011,events,cust-011,checkout,2026-01-16T00:05:00Z,210.50,USD,2026-01-16T00:08:00Z
+evt-1012,crm,cust-012,invoice,2026-01-16T01:05:00Z,14.25,USD,2026-01-16T01:10:00Z
