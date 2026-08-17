@@ -74,12 +74,15 @@ One concrete mapping of the logical architecture onto AWS. Not a dependency — 
 | Bronze / Silver / Gold storage | S3 | Object storage for all three zones, partitioned by date |
 | Ingestion & transformation compute | AWS Glue (Spark) | Runs ingestion, validation, and Silver/Gold transform jobs |
 | Incremental file tracking | AWS Glue Job Bookmarks | Tracks processed files for append-only ingestion — incremental reruns without moving/deleting raw files |
-| Table format / schema registry | Glue Data Catalog + Apache Iceberg | Schema versioning, time travel, safe concurrent writes |
+| Orchestration | EventBridge + Glue Workflows (or Step Functions) | Scheduling, dependency management, retries, and backfill execution |
+| Metadata catalog | Glue Data Catalog | Stores schemas, partitions, and table metadata |
+| Table format | Apache Iceberg | ACID transactions, schema evolution, time travel |
+| Data lineage | Glue Data Catalog + OpenLineage (optional) | End-to-end lineage, impact analysis, and auditing |
 | Consumption / query | Athena or Trino | Ad-hoc SQL and BI access without a provisioned warehouse |
-| Observability | CloudWatch | Job logs, metrics, alarms for freshness/volume/error-rate |
-| Access control | IAM | Least-privilege roles per zone |
+| Monitoring & Alerts | CloudWatch + SNS | Logs, metrics, dashboards, alarms, and operational notifications |
+| Security & Governance | IAM + KMS + Lake Formation | Least-privilege access, encryption at rest, and fine-grained data permissions |
 | Secrets | Secrets Manager | Source-system credentials, never in code or plaintext CI vars |
-| CI/CD | GitLab CI/CD | Lint/test/data-quality gates and environment promotion |
+| CI/CD | GitLab CI/CD | Automated testing, quality gates, artifact promotion, and environment deployment |
 
 ---
 
