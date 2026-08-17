@@ -73,6 +73,7 @@ One concrete mapping of the logical architecture onto AWS. Not a dependency — 
 |---|---|---|
 | Bronze / Silver / Gold storage | S3 | Object storage for all three zones, partitioned by date |
 | Ingestion & transformation compute | AWS Glue (Spark) | Runs ingestion, validation, and Silver/Gold transform jobs |
+| Incremental file tracking | AWS Glue Job Bookmarks | Tracks processed files for append-only ingestion — incremental reruns without moving/deleting raw files |
 | Table format / schema registry | Glue Data Catalog + Apache Iceberg | Schema versioning, time travel, safe concurrent writes |
 | Consumption / query | Athena or Trino | Ad-hoc SQL and BI access without a provisioned warehouse |
 | Observability | CloudWatch | Job logs, metrics, alarms for freshness/volume/error-rate |
@@ -128,7 +129,7 @@ Immutability is **logical, not physical**: business content is preserved exactly
 - Timestamps → UTC ISO 8601; strict type coercion; consistent null handling
 - PII masking and currency normalization are extension points — see *Extension Points*
 
-**Storage:** Parquet, partitioned by `ingestion_date`, sorted on `source_system`/`customer_id` for query pruning without high-cardinality partitions.
+**Storage:** Parquet, partitioned by `event_date` (not `ingestion_date`) — analytics queries prune by when the event happened, this stays consistent with Gold fact tables, and late-arriving records land in their correct historical partition (see *Late-Arriving Data & Reprocessing*). Sorted on `source_system`/`customer_id` for further pruning.
 
 **Why:** Canonical form — one deterministic dedup rule, one schema, safe to build every downstream dataset from.
 
@@ -156,7 +157,7 @@ APIs consume aggregate/feature datasets through a thin read layer, never direct 
 - **Additive changes are free:** new source fields land in Bronze (schema-on-read) and are ignored downstream until a transformation is added.
 - **Backward-compatible only, by default:** removals or type narrowing require a new schema version and a migration plan (dual-write or deprecation window), never an in-place change.
 - **Versioned contracts:** `src/models.py` defines `CURATED_SCHEMA` / `QUARANTINE_SCHEMA` today; production would version these (e.g., `events_v2`) so consumers pin and migrate on their own timeline.
-- **Iceberg over Parquet in production:** native add/rename/reorder without file rewrites, safe concurrent schema+data changes, time travel. Parquet here keeps the take-home dependency-light at this scale — see *Trade-offs*.
+- **Iceberg over Parquet in production:** native add/rename/reorder without rewriting files or breaking concurrent writers — see *Trade-offs* for the full comparison.
 
 ---
 
@@ -178,12 +179,13 @@ APIs consume aggregate/feature datasets through a thin read layer, never direct 
 
 ## Late-Arriving Data & Reprocessing
 
-- **Watermark:** each run tracks the max `ingestion_timestamp` processed; the next run picks up anything after it.
+- **Append-only file ingestion (this take-home):** a Glue Job Bookmark tracks which files have been processed — file-level state, no business-key logic needed to avoid reprocessing.
+- **Incremental DB/API/CDC ingestion:** a watermark or CDC offset tracks which business records have been processed — business-data-level state, based on `updated_at` or a change-log position.
 - **Replay from Bronze:** immutable and append-only, so any run can be safely replayed from the source-of-truth zone.
-- **Partition reprocessing:** Silver/Gold are date-partitioned — a late record reprocesses one partition, not the full table.
+- **Partition reprocessing:** Silver/Gold are partitioned by `event_date` — a late record reprocesses one partition, not the full table.
 - **Idempotent:** dedup runs on every execution, not just first arrival, so reruns converge instead of accumulating duplicates.
 
-**Scope note:** this take-home demonstrates the pattern (dedup + idempotent overwrite); production would add explicit watermark state and partition-scoped reprocessing instead of whole-dataset reruns.
+**Scope note:** this take-home demonstrates the pattern (dedup + idempotent overwrite); production would add explicit bookmark/watermark state and partition-scoped reprocessing instead of whole-dataset reruns.
 
 ---
 
