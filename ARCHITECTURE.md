@@ -2,58 +2,59 @@
 
 ## Overview
 
-This document describes a production-ready data pipeline using a **Bronze → Silver → Gold** layered architecture. The design emphasizes simplicity, reliability, data quality, and observability.
+Production-oriented data pipeline using a **Bronze → Silver → Gold** layered architecture. Design priorities: simplicity, reliability, data quality, observability.
 
 ---
 
 ## Assumptions
 
-- **Batch Processing:** Daily (24-hour) batch cycles; sufficient for BI and analytical use cases
-- **Data Format:** CSV, JSON, or structured file inputs
-- **Scale:** Millions of events per day
-- **Storage:** Cloud object storage (S3, GCS, or equivalent) available
-- **Consumers:** BI tools, analytics queries, ML pipelines
-- **Reliability Priority:** Data accuracy and auditability prioritized over ultra-low latency
-- **Team:** Assumes dedicated data engineering capability; self-service analytics in future state
+| Dimension | Assumption |
+|---|---|
+| Processing | Daily batch cycles; sufficient for BI/analytics SLAs |
+| Input format | CSV, JSON, or structured files |
+| Scale | Millions of events/day |
+| Storage | Cloud object storage (S3, GCS, or equivalent) |
+| Consumers | BI tools, analytics queries, ML pipelines |
+| Reliability | Accuracy and auditability prioritized over ultra-low latency |
+| Team | Dedicated data engineering capability; self-service analytics is a future state |
 
 ---
 
 ## Architecture Diagram
 
+Cloud-agnostic logical view — see *AWS Reference Implementation* for one concrete mapping.
+
 ```mermaid
 graph TB
     subgraph PIPELINE["Data Pipeline"]
         SOURCE["Source Systems<br/>APIs / Files / DB"]
-        ING["Ingestion<br/>(read, parse)"]
-        BRONZE["Bronze<br/>Immutable Landing<br/>s3://bronze/"]
-        VAL["Validation<br/>Types / Required / Format<br/>Duplicates"]
-        QUARANTINE["Quarantine<br/>s3://quarantine/"]
-        SILVER["Silver<br/>Deduplicated & Clean<br/>s3://silver/"]
-        GOLD["Gold<br/>Analytics-Ready<br/>s3://gold/"]
-        CONSUME["Consumption<br/>BI / ML / Analytics"]
+        ING["Ingestion"]
+        BRONZE["Bronze<br/>Immutable Landing"]
+        VAL["Validation"]
+        QUARANTINE["Quarantine"]
+        SILVER["Silver<br/>Deduplicated & Clean"]
+        GOLD["Gold<br/>Fact / Dim / Agg / Feature"]
+        CONSUME["Consumption<br/>BI / ML / APIs"]
     end
-    
-    subgraph CROSSCUTTING["DataOps & Observability (Cross-Cutting)"]
-        LINEAGE["Lineage Tracking<br/>ingestion_id end-to-end"]
-        MONITORING["Monitoring & Alerts<br/>Freshness / Volume / Errors"]
-        SECURITY["Security & Governance<br/>Encryption / Access Control<br/>Audit Logging"]
-        CICD["CI/CD Pipeline<br/>Testing / Approval Gates"]
+
+    subgraph CROSSCUTTING["DataOps & Observability"]
+        LINEAGE["Lineage"]
+        MONITORING["Monitoring & Alerts"]
+        SECURITY["Security & Governance"]
+        CICD["CI/CD"]
     end
-    
-    SOURCE --> ING
-    ING --> BRONZE
-    BRONZE --> VAL
+
+    SOURCE --> ING --> BRONZE --> VAL
     VAL -->|Pass| SILVER
     VAL -->|Fail| QUARANTINE
-    SILVER --> GOLD
-    GOLD --> CONSUME
+    SILVER --> GOLD --> CONSUME
     QUARANTINE -.->|Error Analysis| MONITORING
     VAL -.->|Quality Signals| MONITORING
     SILVER -.->|Lineage| LINEAGE
     ING -.->|Protect| SECURITY
     GOLD -.->|Governed| SECURITY
     SILVER -.->|Gate| CICD
-    
+
     style PIPELINE fill:#f9f9f9
     style CROSSCUTTING fill:#f0f0f0
     style BRONZE fill:#ffe0b2
@@ -64,29 +65,34 @@ graph TB
 
 ---
 
+## AWS Reference Implementation
+
+One concrete mapping of the logical architecture onto AWS. Not a dependency — GCP (GCS/Dataproc/BigQuery) or Azure (ADLS/Databricks/Synapse) equivalents hold the same shape.
+
+| Logical Component | AWS Service | Role |
+|---|---|---|
+| Bronze / Silver / Gold storage | S3 | Object storage for all three zones, partitioned by date |
+| Ingestion & transformation compute | AWS Glue (Spark) | Runs ingestion, validation, and Silver/Gold transform jobs |
+| Table format / schema registry | Glue Data Catalog + Apache Iceberg | Schema versioning, time travel, safe concurrent writes |
+| Consumption / query | Athena or Trino | Ad-hoc SQL and BI access without a provisioned warehouse |
+| Observability | CloudWatch | Job logs, metrics, alarms for freshness/volume/error-rate |
+| Access control | IAM | Least-privilege roles per zone |
+| Secrets | Secrets Manager | Source-system credentials, never in code or plaintext CI vars |
+| CI/CD | GitLab CI/CD | Lint/test/data-quality gates and environment promotion |
+
+---
+
 ## Ingestion Strategy
 
-The pipeline is designed so the **ingestion mechanism is pluggable while the downstream contract stays fixed**. Regardless of how data arrives, every source lands in Bronze in the same shape and flows through the same Validation → Silver → Gold stages. This is what makes the pattern reusable across data products rather than a one-off script per source.
+Ingestion is pluggable; the downstream contract is not. Every mode lands data in Bronze in the same shape, so Validation → Silver → Gold never changes when the ingestion mechanism does.
 
-| Mode | When to use | How it lands in Bronze |
-|------|-------------|-------------------------|
-| **Batch** (implemented in this take-home) | Daily/hourly extracts, file drops, low-freshness SLAs | Full or partitioned file read (CSV/JSON/Parquet) written as-is, tagged with `ingestion_timestamp` |
-| **Incremental (watermark / CDC)** | Source supports `updated_at` or a CDC log, freshness in minutes-to-hours | Pull only rows past the last successful high-watermark, or apply a CDC stream (insert/update/delete) as append-only change events |
-| **Streaming (future evolution)** | Sub-minute freshness required by a specific consumer | A Kafka/Kinesis consumer micro-batches events into the same Bronze layout on a short interval |
+| Mode | When | Bronze landing |
+|---|---|---|
+| **Batch** (implemented here) | Daily/hourly extracts, low-freshness SLAs | Full file read, written as-is with `ingestion_timestamp` |
+| **Incremental (watermark/CDC)** | Source has `updated_at` or a CDC log | Pull rows past the last watermark, or apply CDC events append-only |
+| **Streaming** (future) | Sub-minute freshness required | Kafka/Kinesis consumer micro-batches into the same Bronze layout |
 
-```mermaid
-graph LR
-    B["Batch<br/>file / API pull"] --> BR["Bronze<br/>(same schema, same landing contract)"]
-    I["Incremental<br/>watermark / CDC"] --> BR
-    S["Streaming<br/>(future)"] --> BR
-    BR --> V["Validation"] --> SIL["Silver"] --> G["Gold"]
-
-    style BR fill:#ffe0b2
-```
-
-**Key point:** batch, incremental, and streaming ingestion differ only in *how Bronze gets populated*. Validation, Silver standardization/deduplication, and Gold modeling are ingestion-agnostic — they operate on "whatever landed in Bronze since the last run" regardless of source. Swapping a batch source for a CDC or streaming source requires a new ingestion adapter, not a redesign of the downstream pipeline.
-
-For this take-home, batch ingestion is implemented (`src/reader.py` reads one CSV/JSON file per run). Incremental and streaming are described here as the natural evolution path, not implemented.
+Swapping ingestion modes means writing a new adapter, not redesigning the pipeline.
 
 ---
 
@@ -96,19 +102,16 @@ For this take-home, batch ingestion is implemented (`src/reader.py` reads one CS
 
 **Purpose:** Immutable, authoritative source for replay and audit.
 
-Bronze immutability is **logical, not physical**: the original business content is preserved exactly as received, even though the on-disk encoding is optimized for the lakehouse.
+Immutability is **logical, not physical**: business content is preserved exactly as received; only the on-disk encoding is optimized.
 
-**Design:**
-- Logical immutability — no business validation, no cleansing, no enrichment, no deduplication. Every field value and every record from the source is retained as-is; nothing is corrected, dropped, or reshaped based on business rules.
-- Physical optimization on ingest — the source (CSV/JSON) is converted to Parquet at landing time. This is a lightweight encoding change, not a business transformation: it does not alter, drop, or reinterpret any field value, so it does not compromise immutability.
-- Append-only; never updated or deleted
-- Tagged with ingestion metadata: `ingestion_timestamp`, `source_system`, `ingestion_id`
+- No business validation, cleansing, enrichment, or deduplication — every source record is retained as-is.
+- Format conversion is allowed: CSV/JSON → Parquet at landing time is an encoding change, not a business transformation — no field is altered, dropped, or reinterpreted.
+- Append-only; never updated or deleted.
+- Tagged with `ingestion_timestamp`, `source_system`, `ingestion_id`.
 
-**Storage:** Parquet (compressed), partitioned by `ingestion_date` — chosen over the source's native format because columnar, compressed storage is what makes a lakehouse's downstream query and processing layers (Spark, Trino, etc.) efficient at scale; the format changes, the business record does not.
+**Storage:** Parquet, partitioned by `ingestion_date` — columnar/compressed for efficient downstream query engines; the format changes, the record doesn't.
 
-**Security Note:** Raw PII may exist in Bronze to preserve full replayability and auditability. Access is strictly restricted using least-privilege IAM roles; analysts access masked/tokenized data in Silver/Gold.
-
-**Why:** Because the *logical* business content is untouched, Bronze remains fully replayable — any downstream failure or bug can be fixed and rerun against the same source-of-truth records, with format optimization coming along for free rather than at the cost of trust in the data. Validation, cleansing, and enrichment all happen *after* data lands in Bronze, never during ingest.
+**Why:** Untouched business content keeps Bronze fully replayable — any downstream bug can be fixed and rerun against the same source-of-truth records. Validation, cleansing, and enrichment happen only after Bronze.
 
 ---
 
@@ -116,278 +119,183 @@ Bronze immutability is **logical, not physical**: the original business content 
 
 **Purpose:** Business-ready, single source of truth for analytics.
 
-**Design:**
-
 **Deduplication:**
-- Business key: `{customer_id, source_system, event_id}` identifies unique event
-- When duplicates exist, keep record with highest `event_timestamp` (latest event time)
-- If tied, keep highest `ingestion_timestamp` (most recent arrival)
-- Window: 72 hours (covers late-arriving duplicates; older records assumed resolved)
+- Key: `{customer_id, source_system, event_id}`
+- Keep latest `event_timestamp`; tie-break on latest `ingestion_timestamp`
+- 72h window covers late-arriving duplicates
 
 **Standardization:**
-- Timestamps: UTC ISO 8601
-- Null handling: consistent representation
-- Type coercion: strict (reject invalid amounts, dates, etc.)
-- PII: tokenized (customer names, emails → hash) — see *Extension Points* below; the sample dataset has no name/email fields, so this take-home ships the hook, not the tokenization logic
+- Timestamps → UTC ISO 8601; strict type coercion; consistent null handling
+- PII masking and currency normalization are extension points — see *Extension Points*
 
-**Storage:** Parquet, partitioned by `ingestion_date`; clustered/sorted on frequently filtered columns (e.g., source_system, customer_id) to optimize query performance without high-cardinality partitioning.
+**Storage:** Parquet, partitioned by `ingestion_date`, sorted on `source_system`/`customer_id` for query pruning without high-cardinality partitions.
 
-**Why:** Silver is the canonical form. Deduplication uses business logic; PII masking prevents accidental exposure. Schema versioning allows safe evolution.
+**Why:** Canonical form — one deterministic dedup rule, one schema, safe to build every downstream dataset from.
 
 ---
 
 ### Gold Layer (Curated Analytics)
 
-**Purpose:** Publish business-oriented, consumption-ready data products — not a single generic "clean" table.
+**Purpose:** Business-oriented data products, not one generic "clean" table.
 
-**Design — dataset types:**
-- **Fact tables** (`fact_events`): denormalized event grain with customer attributes, partitioned by `event_date`
-- **Dimension tables** (`dim_customers`): Type 2 SCD (effective_date, end_date) for historical tracking; enables "as-of" joins
-- **Aggregated datasets** (`agg_daily_revenue`): pre-computed rollups by date/customer for fast dashboards
-- **ML feature datasets**: point-in-time-correct feature tables (e.g., rolling customer spend, event frequency) built from the same Silver source, versioned so training and serving use consistent definitions
+| Dataset type | Example | Primary consumer |
+|---|---|---|
+| Fact | `fact_events` (denormalized, partitioned by `event_date`) | SQL analysts, data products |
+| Dimension | `dim_customers` (Type 2 SCD) | SQL analysts, "as-of" joins |
+| Aggregate | `agg_daily_revenue` | BI dashboards |
+| ML feature | Point-in-time feature tables built from Silver | ML training/serving (versioned) |
 
-**Intended consumers:**
+APIs consume aggregate/feature datasets through a thin read layer, never direct table access.
 
-| Consumer | Access pattern |
-|----------|----------------|
-| BI dashboards | Aggregated datasets, via warehouse/lakehouse SQL |
-| SQL analysts | Fact/dimension tables, ad-hoc joins |
-| Machine learning | Feature datasets, batch or online feature-store export |
-| Data products / other teams | Fact/dimension tables treated as a stable, owned contract |
-| APIs | Aggregated or feature datasets served through a thin read API, not direct table access |
-
-**Why:** Modeling Gold as distinct fact/dimension/aggregate/feature datasets — instead of one wide table — lets each consumer use the shape suited to their access pattern, and lets datasets evolve independently as long as each keeps its own contract stable.
+**Why:** Distinct dataset shapes per access pattern let each evolve independently while keeping its own contract stable.
 
 ---
 
 ## Schema Evolution
 
-Source schemas change over time (new fields, renamed fields, type widening). The pipeline handles this by keeping each layer's contract explicit and by preferring additive, backward-compatible changes:
-
-- **Additive columns:** new source fields land in Bronze automatically (schema-on-read) and are ignored by Silver/Gold until a validated transformation is added for them. Existing consumers are unaffected.
-- **Backward-compatible changes only, by default:** column removals or type narrowing require a new schema version and a migration plan (dual-write or a deprecation window), not an in-place change to a production table.
-- **Versioned schemas:** `src/models.py` defines the curated and quarantine schemas as explicit contracts (`CURATED_SCHEMA`, `QUARANTINE_SCHEMA`). In production these would be versioned (e.g., `events_v2`) so downstream jobs can pin to a known schema and migrate on their own timeline instead of breaking on deploy.
-- **Why Apache Iceberg would be preferred in production:** Iceberg (or Delta Lake) gives schema evolution as a first-class table operation — add/rename/reorder columns without rewriting files, safe concurrent schema and data changes, and time travel to audit what a table looked like before a schema change. That removes the need to hand-roll versioning and backfills.
-- **Why this take-home intentionally uses Parquet instead:** at this scale (a handful of files, single-process pandas job, no concurrent writers), a table format adds operational and dependency overhead without a corresponding benefit. Plain partitioned Parquet keeps the exercise simple and dependency-light while preserving the same columnar, compressed storage. The migration path to Iceberg is additive — existing Parquet files can be registered into an Iceberg table without rewriting data.
+- **Additive changes are free:** new source fields land in Bronze (schema-on-read) and are ignored downstream until a transformation is added.
+- **Backward-compatible only, by default:** removals or type narrowing require a new schema version and a migration plan (dual-write or deprecation window), never an in-place change.
+- **Versioned contracts:** `src/models.py` defines `CURATED_SCHEMA` / `QUARANTINE_SCHEMA` today; production would version these (e.g., `events_v2`) so consumers pin and migrate on their own timeline.
+- **Iceberg over Parquet in production:** native add/rename/reorder without file rewrites, safe concurrent schema+data changes, time travel. Parquet here keeps the take-home dependency-light at this scale — see *Trade-offs*.
 
 ---
 
 ## Data Quality & Validation
 
-**Validation (Implementation Focus):**
-
-Core validation rules applied in Silver layer to catch data quality issues before analytics consumption:
-
 | Field | Rule | Action |
-|-------|------|--------|
+|---|---|---|
 | `event_id` | NOT NULL, format valid | Quarantine |
 | `customer_id` | NOT NULL | Quarantine |
 | `event_timestamp` | Valid ISO 8601, not future | Quarantine |
 | `amount` | Numeric, >= 0 | Quarantine |
-| Uniqueness | No duplicate `{customer_id, event_id}` within 72h | Deduplicate |
+| Uniqueness | No duplicate `{customer_id, source_system, event_id}` within 72h | Deduplicate |
 
-**Quarantine Handling:**
-- Records failing validation land in `s3://quarantine/` with error details
-- Enables diagnosis without blocking pipeline
-- Data steward inspects and reprocesses after fixing upstream issue
+**Quarantine:** failed records land with error detail and don't block the pipeline; a data steward reprocesses after the upstream issue is fixed.
 
-**Data Quality Monitoring (Production Enhancement):**
-
-The following signals can be tracked in production (not required for this implementation):
-- Freshness: time since latest record ingested
-- Completeness: percentage of non-null values per column
-- Volume trends: row count anomalies
-- Duplicate rate: indicator of upstream issues
-- Validation failure rate: quality degradation over time
+**Production monitoring (not built here):** freshness, completeness, volume trend, duplicate rate, validation failure rate.
 
 ---
 
 ## Late-Arriving Data & Reprocessing
 
-Late-arriving records (events that reach the pipeline after their `event_date` has already been processed) are handled without corrupting already-published Gold datasets:
+- **Watermark:** each run tracks the max `ingestion_timestamp` processed; the next run picks up anything after it.
+- **Replay from Bronze:** immutable and append-only, so any run can be safely replayed from the source-of-truth zone.
+- **Partition reprocessing:** Silver/Gold are date-partitioned — a late record reprocesses one partition, not the full table.
+- **Idempotent:** dedup runs on every execution, not just first arrival, so reruns converge instead of accumulating duplicates.
 
-- **Watermark processing:** each run tracks the maximum `ingestion_timestamp` it has processed. The next run reads everything at or after that watermark, so a record that arrives late is picked up on the next scheduled run rather than silently missed.
-- **Replay from Bronze:** because Bronze is immutable and append-only, any run can be safely replayed by re-reading the affected Bronze partition(s) — Bronze is the durable source of truth, so reprocessing never depends on Silver/Gold still holding the original data.
-- **Partition reprocessing:** Silver/Gold are partitioned by date, so a late record only requires reprocessing the partition(s) it affects (e.g., re-running one day) rather than a full-table rebuild.
-- **Idempotent reruns:** deduplication runs on the business key (`customer_id`, `source_system`, `event_id`) on every run, not just on first arrival. Re-running the same day, or reprocessing a day that now includes a late-arriving duplicate, converges to the same curated output rather than accumulating duplicates.
-- **Incorporating late data safely:** a late record is merged into its correct partition (upsert / replace-partition semantics) rather than appended to "today's" run, so historical Gold aggregates stay correct for the date the event actually belongs to.
-
-**Scope note:** the take-home implementation demonstrates this pattern at small scale — the dedup logic and idempotent full-file overwrite show the mechanics — but it does not implement true partition-level watermark tracking or partial reprocessing. A production version would track watermarks explicitly (e.g., a small state table) and reprocess only the affected date partitions instead of the whole dataset on every run.
+**Scope note:** this take-home demonstrates the pattern (dedup + idempotent overwrite); production would add explicit watermark state and partition-scoped reprocessing instead of whole-dataset reruns.
 
 ---
 
 ## Orchestration & Execution
 
-**Pipeline Stages (Daily Batch):**
-
 ```
 Trigger: Daily
-
-├── fetch_and_ingest (read APIs/files/DBs, write Bronze)
-├── validate_quality (check types, required fields, duplicates)
-│   ├── Pass → transform_to_silver (deduplicate, standardize, mask PII)
-│   └── Fail → quarantine
-├── aggregate_to_gold (build fact, dimension, aggregate tables)
-└── publish_metrics (log quality signals, freshness, volume)
+├── fetch_and_ingest   → Bronze
+├── validate_quality   → Pass: Silver | Fail: Quarantine
+├── aggregate_to_gold  → fact / dim / agg tables
+└── publish_metrics    → freshness, volume, quality signals
 ```
 
-**Orchestration Platform:** Platform-agnostic design. Can be implemented using Apache Airflow, AWS Step Functions, Prefect, or equivalent. Loose coupling between stages enables easy substitution.
+Platform-agnostic (Airflow, Step Functions, Prefect, Glue Workflows) — stages are loosely coupled, so the orchestrator is swappable.
 
-**Idempotency:**
-- Each run tagged with execution date
-- Re-running same day produces identical output (no duplicates)
-- Enables safe replay of failed runs
-
-**Error Handling:**
-- Transient failures (network, timeout): retry with backoff
-- Validation failures: route to Quarantine; continue pipeline
-- Critical pipeline failures: alert; halt further promotion
+- **Idempotency:** each run tagged by execution date; reruns produce identical output.
+- **Retries:** transient failures (network, timeout) retry with backoff; validation failures route to quarantine and continue; critical failures halt promotion and alert.
 
 ---
 
 ## Security & Data Governance
 
-**Data Classification:**
-- **Public:** Customer IDs, transaction amounts
-- **Internal:** Customer names, emails (tokenized in Silver)
-- **Sensitive:** Passwords, payment cards (never stored)
+| Classification | Examples | Handling |
+|---|---|---|
+| Public | Customer ID, amount | Standard access control |
+| Internal | Customer name, email | Tokenized in Silver — extension point, see *Extension Points* |
+| Sensitive | Passwords, card numbers | Never stored |
 
-**Security Measures:**
-- Encryption in transit: TLS for all API/S3 calls
-- Encryption at rest: S3 default encryption (AES-256)
-- Access control: IAM roles (least privilege); Bronze/Silver read-only for analysts
-- Audit: S3 access logging; immutable records enable trail
-
-**PII Handling:**
-- At Bronze: store as-is (for replay/diagnosis)
-- At Silver: tokenize (hash) customer names/emails — see *Extension Points* below for what's implemented vs. designed
-- Governance: prevent accidental export of unmasked data
+- **Encryption:** TLS in transit; encryption at rest across all storage zones.
+- **Access:** least-privilege IAM roles; analysts get read-only Bronze/Silver, masked data only.
+- **Audit:** access logging on all zones; immutable Bronze gives a durable trail.
+- **PII lifecycle:** Bronze stores as-received (for replay); masking applied at Silver before wider access.
 
 ---
 
-## Extension Points (Take-Home Scope vs. Production)
+## Extension Points
 
-Three transformation steps are intentionally implemented as **hooks that run but do no work yet**, rather than left out entirely: `mask_pii()`, `standardize_currency()`, and `apply_business_transformations()` in `src/transformer.py`. Each is called by the pipeline, logs its intent, and returns the DataFrame unchanged. This keeps the pipeline's shape production-representative (validate → transform → mask → standardize → publish) without building logic the sample dataset doesn't exercise — it has no name/email fields, and all sample amounts are already in their listed currency.
+`mask_pii()`, `standardize_currency()`, and `apply_business_transformations()` in `src/transformer.py` run today as no-op hooks — called, logged, pass data through unchanged. The sample dataset has no name/email fields and single-currency amounts, so there's nothing to build against yet; the hooks exist so the seam is visible in code and here rather than silently absent.
 
-What an enterprise implementation would plug into these hooks:
-- **PII masking:** a tokenization/vaulting service (e.g., format-preserving encryption or a hash with a centrally managed salt) so the mapping between raw and masked values is centrally governed and revocable, not a local hash.
-- **Currency normalization:** a reference-data feed (FX rates by date) joined in rather than a hard-coded rate, so historical amounts convert using the rate in effect at `event_timestamp`.
-- **Business transformations:** a rules engine or versioned business-logic module, so domain rules can change without redeploying the pipeline and can be tested and audited independently.
-
-This is a scope decision, not an oversight: the hooks exist so the extension points are visible in both the code and this document, while the actual integrations are out of scope for a 2–3 hour exercise.
+| Hook | Production integration |
+|---|---|
+| PII masking | Tokenization/vaulting service (format-preserving encryption or centrally managed salt) — not a local hash |
+| Currency normalization | FX reference-data feed, rate as of `event_timestamp` |
+| Business transformations | Versioned rules engine, testable/auditable independent of pipeline deploys |
 
 ---
 
 ## Cost Optimization
 
-**Storage Efficiency:**
-- Parquet + compression: ~80% reduction vs. CSV
-- Partitioning by date: enables partition pruning
-- Lifecycle policies: Quarantine (30 days) → Bronze (6 months) → archive beyond
+- **Storage:** Parquet + compression (~80% smaller than CSV); partition pruning by date; lifecycle tiering — quarantine 30d, Bronze 6mo, then archive.
+- **Compute:** daily batch instead of streaming; parallelizable by `source_system`; right-sized rather than over-provisioned.
 
-**Compute Efficiency:**
-- Daily batch: simpler, cheaper than streaming (sufficient for most BI use cases)
-- Parallel ingestion by source_system
-- Right-sized compute: balance cost vs runtime
-
-**Why:** Storage is cheap; compute is expensive. Compression + partitioning provide 80/20 return on effort.
+**Why:** storage is cheap, compute is expensive — compression and partitioning are the 80/20 cost lever.
 
 ---
 
 ## CI/CD & Deployment
 
-**Promotion Pipeline:**
-
 ```
-Trigger: Pull Request → Merge Approval
-
-Stage 1: Lint & Type Check (flake8, mypy, bandit)
-Stage 2: Unit Tests (reader, validator, transformer, writer)
-  └── Coverage: >= 80%
-Stage 3: Integration Test (sample data → full pipeline)
-Stage 4: Data Quality Test (validate against baseline)
-Stage 5: Manual Code Review & Approval
-Stage 6: Deploy to Staging (smoke tests)
-Stage 7: Deploy to Production (gradual rollout)
+Developer (local run + unit tests)
+    → Dev (CI: lint, unit tests, data quality, build — every commit)
+    → Test (staging: full pipeline, sample data, smoke tests)
+    → Manual Approval (human gate)
+    → Production (monitored, real data)
 ```
 
-**Environment Promotion:**
+Maps directly to `.gitlab-ci.yml`: `lint` → `unit_tests` → `data_quality` → `build` = Dev; `deploy_staging` = Test; `manual_prod_gate` = approval; `deploy_prod` = Production. `needs:` enforces that every later stage requires all earlier stages to pass.
 
-The same, unmodified pipeline artifact is promoted through environments — nothing is rebuilt or hand-edited between stages:
-
-```
-Developer (local run, unit tests)
-    ↓
-Dev (CI: lint, unit tests, data quality checks — every commit)
-    ↓
-Test (staging: full pipeline against representative sample data)
-    ↓
-Manual Approval (human reviewer gates production promotion)
-    ↓
-Production (monitored, prod data)
-```
-
-`.gitlab-ci.yml` implements a condensed version of this flow for the take-home's scope: `lint` / `unit_tests` / `data_quality` / `build` stand in for the Developer + Dev stages, `deploy_staging` stands in for Test, `manual_prod_gate` is the approval gate, and `deploy_prod` is the final promotion — each later stage runs only if every prior stage succeeded (`needs:`).
-
-**Configuration is environment-driven, not code-driven:** the same code and container image run in every environment; only environment variables change (e.g., input/output paths, credentials, feature flags), injected via GitLab CI/CD variables scoped per `environment:` rather than via branches or code edits. This is what makes promotion safe — the artifact that passed tests in Dev/Test is bit-for-bit the artifact that runs in Production.
-
-**Environment Management:**
-- Dev: local + CI; full test suite
-- Staging: pre-prod; sample data; all controls
-- Production: prod data; monitoring + alerting
-
-**Rollback:** Reprocess from Bronze if Silver/Gold corrupted.
+- **Config is environment-driven, not code-driven:** the same artifact runs everywhere; only CI/CD variables change (paths, credentials, flags) per `environment:`. This is what makes promotion safe.
+- **Rollback:** reprocess from Bronze if Silver/Gold is corrupted.
 
 ---
 
 ## Trade-offs & Justification
 
 | Decision | Rationale |
-|----------|-----------|
-| **Batch vs. Streaming** | Batch (daily) sufficient for BI/analytics. Add streaming only if sub-minute freshness required. |
-| **Schema-on-Read (Bronze) vs. Schema-on-Write (Silver/Gold)** | Flexible upstream captures all source data; strict downstream prevents bad data from analytics. |
-| **Deduplication Window (72 hours)** | Covers late-arriving duplicates; balances memory/compute vs. accuracy. |
-| **Immutable Bronze** | Enables replay, audit, recovery. Storage overhead minimal. |
-| **Airflow Orchestration** | Logs every step; enables debugging, transparency. Alternative: managed Step Functions (lighter ops, less visibility). |
-| **Parquet (take-home) vs. Iceberg (production)** | Plain Parquet keeps the exercise dependency-light; Iceberg adds native schema evolution, time travel, and safe concurrent writes at production scale — see *Schema Evolution*. |
+|---|---|
+| **Batch vs. Streaming** | Batch is sufficient for BI/analytics SLAs; add streaming only where a consumer needs sub-minute freshness. |
+| **Pandas vs. Spark** | Pandas fits this take-home's single-file, in-memory scale; Spark becomes necessary once data no longer fits on one node — same pipeline logic, different execution engine. |
+| **Parquet vs. Iceberg** | Parquet keeps the exercise dependency-light; Iceberg earns its cost at production scale via schema evolution, time travel, and concurrent writes. |
+| **Quarantine vs. Pipeline Failure** | Bad records are isolated and the pipeline continues, so one malformed row doesn't block a whole day's curated output; a data steward remediates asynchronously. |
+| **Managed vs. Self-managed Orchestration** | Managed (Glue Workflows, Step Functions) reduces ops burden; self-managed (Airflow) trades that for finer-grained control and visibility. Either fits this design — orchestration is swappable by construction. |
 
 ---
 
 ## Observability & Alerting
 
-**Key Signals:**
-
 | Signal | Purpose |
-|--------|---------|
-| Pipeline Duration | Detect performance regression |
-| Ingestion Freshness | Data recency |
-| Row Count Trend | Detect upstream issues or corruption |
-| Validation Failure Rate | Quality degradation |
-| Duplicate Rate | High indicates upstream duplicate source |
+|---|---|
+| Pipeline duration | Performance regression |
+| Ingestion freshness | Data recency |
+| Row count trend | Upstream issues or corruption |
+| Validation failure rate | Quality degradation |
+| Duplicate rate | Upstream duplicate source |
 
-**Stack:** Logs (CloudWatch/ELK), Metrics (Prometheus/Grafana), Lineage (tracking via ingestion_id), Alerts (PagerDuty for critical SLA breaches)
+**Stack:** logs (CloudWatch/ELK), metrics (Prometheus/Grafana or CloudWatch Metrics), lineage (`ingestion_id` end-to-end), alerts (PagerDuty on SLA breach).
 
 ---
 
-## Production Roadmap (Future)
+## Future Evolution
 
-1. **Streaming:** Kafka → Bronze for real-time events
-2. **Schema Registry:** formalize the versioned-schema approach described in *Schema Evolution* as enforced producer contracts
-3. **Advanced Quality:** ML-based anomaly detection
-4. **dbt Integration:** Version control, testing, documentation for transformations
-5. **Multi-region Replication:** Critical datasets to secondary region for DR
-6. **Lineage Platform:** DataHub / OpenMetadata for column-level lineage
+Not a technology list — the axes this design would need to flex on as the organization scales:
+
+| Driver | What changes |
+|---|---|
+| **Larger data volume** | Pandas → Spark/Trino for compute; Parquet → Iceberg for table-level scale and concurrent writers |
+| **Lower latency** | Batch → incremental (watermark/CDC) → streaming, per *Ingestion Strategy* — downstream stages don't change |
+| **More pipelines** | The Bronze→Silver→Gold pattern, validation library, and CI/CD skeleton are templated and reused, not rebuilt per pipeline |
+| **More teams** | Gold datasets become owned, versioned contracts; schema registry and access control shift from centralized to domain-owned |
 
 ---
 
 ## Summary
 
-This architecture delivers:
-
-✅ **Reliability:** Immutable Bronze, quarantine for failures, idempotent execution  
-✅ **Observability:** Quality metrics, lineage tracking, operational alerting  
-✅ **Security:** Encryption, access control, PII handling, audit trails  
-✅ **Maintainability:** Clear separation of concerns, versioned schemas, modular code  
-✅ **Cost-Efficiency:** Compression, partitioning, lifecycle policies, batch processing  
-
-Production-ready and intentionally simple while remaining extensible. As data volume and platform requirements evolve, the design scales naturally through incremental additions (streaming, advanced quality, multi-region replication, etc.).
+Bronze → Silver → Gold with clear zone contracts, quarantine-not-fail validation, deterministic deduplication, and idempotent reruns. Pluggable ingestion and orchestration keep the pattern reusable across data products; extension points (PII, currency, business rules) and a versioned-schema path keep it production-extensible without over-building for a 2–3 hour exercise.
