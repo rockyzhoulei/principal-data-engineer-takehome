@@ -78,7 +78,7 @@ One concrete mapping of the logical architecture onto AWS. Not a dependency — 
 | Metadata catalog | Glue Data Catalog | Stores schemas, partitions, and table metadata |
 | Table format | Apache Iceberg | ACID transactions, schema evolution, time travel |
 | Data lineage | Glue Data Catalog + OpenLineage (optional) | End-to-end lineage, impact analysis, and auditing |
-| Consumption / query | Athena or Trino | Ad-hoc SQL and BI access without a provisioned warehouse |
+| Consumption / query | Athena/Trino/Redshift | Ad-hoc SQL and BI access without a provisioned warehouse |
 | Monitoring & Alerts | CloudWatch + SNS | Logs, metrics, dashboards, alarms, and operational notifications |
 | Security & Governance | IAM + KMS + Lake Formation | Least-privilege access, encryption at rest, and fine-grained data permissions |
 | Secrets | Secrets Manager | Source-system credentials, never in code or plaintext CI vars |
