@@ -96,17 +96,19 @@ For this take-home, batch ingestion is implemented (`src/reader.py` reads one CS
 
 **Purpose:** Immutable, authoritative source for replay and audit.
 
+Bronze immutability is **logical, not physical**: the original business content is preserved exactly as received, even though the on-disk encoding is optimized for the lakehouse.
+
 **Design:**
-- Exact copy-as-is from source (file readable check only, no business validation)
+- Logical immutability — no business validation, no cleansing, no enrichment, no deduplication. Every field value and every record from the source is retained as-is; nothing is corrected, dropped, or reshaped based on business rules.
+- Physical optimization on ingest — the source (CSV/JSON) is converted to Parquet at landing time. This is a lightweight encoding change, not a business transformation: it does not alter, drop, or reinterpret any field value, so it does not compromise immutability.
 - Append-only; never updated or deleted
 - Tagged with ingestion metadata: `ingestion_timestamp`, `source_system`, `ingestion_id`
-- Enables full replayability: downstream failures don't affect raw data
 
-**Storage:** Parquet (compressed), partitioned by `ingestion_date`
+**Storage:** Parquet (compressed), partitioned by `ingestion_date` — chosen over the source's native format because columnar, compressed storage is what makes a lakehouse's downstream query and processing layers (Spark, Trino, etc.) efficient at scale; the format changes, the business record does not.
 
 **Security Note:** Raw PII may exist in Bronze to preserve full replayability and auditability. Access is strictly restricted using least-privilege IAM roles; analysts access masked/tokenized data in Silver/Gold.
 
-**Why:** Immutability enables safe recovery, auditability, and decouples ingestion from validation. Validation happens *after* data lands in Bronze.
+**Why:** Because the *logical* business content is untouched, Bronze remains fully replayable — any downstream failure or bug can be fixed and rerun against the same source-of-truth records, with format optimization coming along for free rather than at the cost of trust in the data. Validation, cleansing, and enrichment all happen *after* data lands in Bronze, never during ingest.
 
 ---
 
