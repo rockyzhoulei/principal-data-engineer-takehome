@@ -10,13 +10,13 @@ Production-oriented data pipeline using a **Bronze → Silver → Gold** layered
 
 | Dimension | Assumption |
 |---|---|
-| Processing | Daily batch cycles; sufficient for BI/analytics SLAs |
-| Input format | CSV, JSON, or structured files |
-| Scale | Millions of events/day |
-| Storage | Cloud object storage (S3, GCS, or equivalent) |
-| Consumers | BI tools, analytics queries, ML pipelines |
-| Reliability | Accuracy and auditability prioritized over ultra-low latency |
-| Team | Dedicated data engineering capability; self-service analytics is a future state |
+| Processing | Daily batch processing; latency can evolve to incremental or streaming as business requirements change |
+| Input format | CSV, JSON, or structured source data (files, databases, or APIs) |
+| Scale | Millions of records per day; single pipeline with room to scale horizontally |
+| Storage | Cloud object storage (Amazon S3 or equivalent) |
+| Consumers | BI dashboards, analytics queries, downstream applications, and ML workloads |
+| Reliability | Data quality, replayability, and auditability are prioritized over ultra-low latency |
+| Organization | Centralized platform initially; ownership and governance evolve toward domain-owned data products as the organization grows |
 
 ---
 
