@@ -115,6 +115,8 @@ Immutability is **logical, not physical**: business content is preserved exactly
 
 **Storage:** Parquet, partitioned by `ingestion_date` — columnar/compressed for efficient downstream query engines; the format changes, the record doesn't.
 
+**Landing zone:** original CSV/JSON files land in a short-lived S3 prefix ahead of Parquet conversion; an S3 Lifecycle policy expires them after 7–30 days once Bronze holds the converted, immutable copy. Bronze — not the landing files — is the long-term source.
+
 **Why:** Untouched business content keeps Bronze fully replayable — any downstream bug can be fixed and rerun against the same source-of-truth records. Validation, cleansing, and enrichment happen only after Bronze.
 
 ---
@@ -188,6 +190,11 @@ APIs consume aggregate/feature datasets through a thin read layer, never direct 
 - **Partition reprocessing:** Silver/Gold are partitioned by `event_date` — a late record reprocesses one partition, not the full table.
 - **Idempotent:** dedup runs on every execution, not just first arrival, so reruns converge instead of accumulating duplicates.
 
+**Backfill:**
+- Triggered manually with a parameterized date range (start/end), not the daily schedule — only the read scope changes.
+- Replays the corresponding Bronze partitions through the same Silver/Gold pipeline logic; no separate backfill code path.
+- Silver/Gold partitions in scope are overwritten (or MERGE'd) with the recomputed result; everything outside the range is untouched.
+
 **Scope note:** this take-home demonstrates the pattern (dedup + idempotent overwrite); production would add explicit bookmark/watermark state and partition-scoped reprocessing instead of whole-dataset reruns.
 
 ---
@@ -258,6 +265,7 @@ Developer (local run + unit tests)
 Maps directly to `.gitlab-ci.yml`: `lint` → `unit_tests` → `data_quality` → `build` = Dev; `deploy_staging` = Test; `manual_prod_gate` = approval; `deploy_prod` = Production. `needs:` enforces that every later stage requires all earlier stages to pass.
 
 - **Config is environment-driven, not code-driven:** the same artifact runs everywhere; only CI/CD variables change (paths, credentials, flags) per `environment:`. This is what makes promotion safe.
+- **Infrastructure as Code:** the same pipeline artifact is promoted across environments, while the underlying AWS infrastructure (Glue jobs, Step Functions, IAM roles, S3 buckets) is provisioned through Terraform or CDK rather than manual changes.
 - **Rollback:** reprocess from Bronze if Silver/Gold is corrupted.
 
 ---
@@ -285,6 +293,10 @@ Maps directly to `.gitlab-ci.yml`: `lint` → `unit_tests` → `data_quality` �
 | Duplicate rate | Upstream duplicate source |
 
 **Stack:** logs (CloudWatch/ELK), metrics (Prometheus/Grafana or CloudWatch Metrics), lineage (`ingestion_id` end-to-end), alerts (PagerDuty on SLA breach).
+
+**Example SLA:** if no new Bronze partition arrives within 2 hours of the scheduled ingestion window, a CloudWatch alarm triggers an SNS alert.
+
+**Lineage metadata:** every ingestion run tags records with `ingestion_id`, source file, pipeline run ID, and processing timestamp — enough to trace a curated row back to its source, replay the run, or audit it later.
 
 ---
 
