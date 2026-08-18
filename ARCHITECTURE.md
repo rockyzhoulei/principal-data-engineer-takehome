@@ -310,6 +310,9 @@ Not a technology list — the axes this design would need to flex on as the orga
 | **Lower latency** | Batch → incremental (watermark/CDC) → streaming, per *Ingestion Strategy* — downstream stages don't change |
 | **More pipelines** | The Bronze→Silver→Gold pattern, validation library, and CI/CD skeleton are templated and reused, not rebuilt per pipeline |
 | **More teams** | Gold datasets become owned, versioned contracts; schema registry and access control shift from centralized to domain-owned |
+| **AI/ML adoption** | Trusted Gold datasets evolve into reusable feature tables, embedding pipelines, and vector-ready data products; the Bronze→Silver→Gold architecture remains unchanged — AI becomes another consumer of trusted data products, not a new pipeline |
+
+As AI adoption grows, the same architecture supports traditional analytics, machine learning, and GenAI workloads without changing the core pipeline design.
 
 ---
 
