@@ -71,17 +71,17 @@ One concrete mapping of the logical architecture onto AWS. Not a dependency — 
 
 | Logical Component | AWS Service | Role |
 |---|---|---|
-| Bronze / Silver / Gold storage | S3 | Object storage for all three zones, partitioned by date |
-| Ingestion & transformation compute | AWS Glue (Spark) | Runs ingestion, validation, and Silver/Gold transform jobs |
-| Incremental file tracking | AWS Glue Job Bookmarks | Tracks processed files for append-only ingestion — incremental reruns without moving/deleting raw files |
-| Orchestration | EventBridge + Glue Workflows (or Step Functions) | Scheduling, dependency management, retries, and backfill execution |
-| Metadata catalog | Glue Data Catalog | Stores schemas, partitions, and table metadata |
-| Table format | Apache Iceberg | ACID transactions, schema evolution, time travel |
-| Data lineage | Glue Data Catalog (optional DataZone / DataHub) | End-to-end lineage, impact analysis, and auditing |
-| Consumption / query | Athena/Trino/Redshift | Ad-hoc SQL and BI access without a provisioned warehouse |
+| Landing storage | Amazon S3 | Temporary landing zone for raw source files before ingestion, managed with S3 Lifecycle policies |
+| Bronze / Silver / Gold storage | Amazon S3 + Apache Iceberg | Stores Bronze, Silver, and Gold datasets with partitioning, ACID transactions, schema evolution, and time travel |
+| Data processing | AWS Glue (Spark) | Reads landed data and performs ingestion, validation, transformations, and publishing across Bronze, Silver, and Gold |
+| Incremental ingestion | AWS Glue Job Bookmarks | Tracks processed files for file-level incremental ingestion without moving or deleting raw files |
+| Orchestration | EventBridge + Glue Workflows (or Step Functions) | Schedule pipeline execution, coordinate dependencies, retries, and parameterized backfills |
+| Metadata catalog | Glue Data Catalog | Stores table metadata, schemas, partitions, and storage locations |
+| Metadata & Lineage | Pipeline Metadata + Glue Data Catalog (optional Amazon DataZone) | Provides operational traceability, replay support, metadata management, and lineage visualization |
+| Consumption / Serving | Athena / Trino / Redshift | Serves trusted datasets for analytics, BI, reporting, and downstream applications |
 | Monitoring & Alerts | CloudWatch + SNS | Logs, metrics, dashboards, alarms, and operational notifications |
-| Security & Governance | IAM + KMS + Lake Formation | Least-privilege access, encryption at rest, and fine-grained data permissions |
-| Secrets | Secrets Manager | Source-system credentials, never in code or plaintext CI vars |
+| Security & Governance | IAM + KMS + Lake Formation | Identity and access management, encryption, fine-grained data permissions, and governance policies |
+| Secrets Management | Secrets Manager | Securely manages database credentials, API keys, and other secrets outside application code |
 | CI/CD | GitLab CI/CD | Automated testing, quality gates, artifact promotion, and environment deployment |
 
 ---
