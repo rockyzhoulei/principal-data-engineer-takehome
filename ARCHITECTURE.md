@@ -159,10 +159,10 @@ APIs consume aggregate/feature datasets through a thin read layer, never direct 
 
 ## Schema Evolution
 
-- **Additive changes are free:** new source fields land in Bronze (schema-on-read) and are ignored downstream until a transformation is added.
-- **Backward-compatible only, by default:** removals or type narrowing require a new schema version and a migration plan (dual-write or deprecation window), never an in-place change.
-- **Versioned contracts:** `src/models.py` defines `CURATED_SCHEMA` / `QUARANTINE_SCHEMA` today; production would version these (e.g., `events_v2`) so consumers pin and migrate on their own timeline.
-- **Iceberg over Parquet in production:** native add/rename/reorder without rewriting files or breaking concurrent writers — see *Trade-offs* for the full comparison.
+- **Additive changes:** new columns are preserved in Bronze and promoted downstream only when needed.
+- **Breaking changes:** introduce a new schema version and migrate consumers gradually instead of changing existing datasets in place.
+- **Versioned contracts:** Gold datasets expose stable, versioned schemas so downstream consumers can upgrade on their own timeline.
+- **Production:** Apache Iceberg simplifies schema evolution through ACID transactions and backward-compatible schema changes.
 
 ---
 
